@@ -7,3 +7,5 @@
 .config/quickshell/qml_color.json
 .config/hypr/scripts/dots-tui-*
 .config/hypr/rofi/.current_wallpaper*
+.config/hypr/scripts/dots-tui
+.config/hypr/scripts/dots-tui
