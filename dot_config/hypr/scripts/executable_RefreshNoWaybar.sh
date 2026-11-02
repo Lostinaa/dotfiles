@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
-# /* ---- 💫 https://github.com/JaKooLit 💫 ---- */  ##
+# ==================================================
+#  KoolDots (2026)
+#  Project URL: https://github.com/LinuxBeginnings
+#  License: GNU GPLv3
+#  SPDX-License-Identifier: GPL-3.0-or-later
+# ==================================================
 
 # Modified version of Refresh.sh but waybar wont refresh
 # Used by automatic wallpaper change
 # Modified inorder to refresh rofi background, Wallust, SwayNC only
 
-SCRIPTSDIR=$HOME/.config/hypr/scripts
-UserScripts=$HOME/.config/hypr/UserScripts
-
-# Define file_exists function
-file_exists() {
-    if [ -e "$1" ]; then
-        return 0  # File exists
-    else
-        return 1  # File does not exist
-    fi
-}
+SCRIPTSDIR=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/scripts
+QS_TEXTINPUT_LOG_RULE="qt.qpa.wayland.textinput.warning=false"
 
 # Kill already running processes
 _ps=(rofi)
@@ -26,23 +22,21 @@ for _prs in "${_ps[@]}"; do
 done
 
 # quit ags & relaunch ags
-#ags -q && ags &
+ags -q && ags &
 
 # quit quickshell & relaunch quickshell
-pkill qs && qs &
+pkill qs && qs --log-rules "$QS_TEXTINPUT_LOG_RULE" &
 
-# Wallust refresh (synchronous to ensure colors are ready)
-${SCRIPTSDIR}/WallustSwww.sh
-sleep 0.2
 
 # reload swaync
-swaync-client --reload-config
+(swaync-client -R -rs --skip-wait >/dev/null 2>&1 &)
 
-# Relaunching rainbow borders if the script exists
+# Re-apply the selected Rainbow Borders mode. The single implementation lives
+# in RainbowBordersStartup.sh so this script, Refresh.sh and the wallpaper pass
+# cannot drift apart.
 sleep 1
-if file_exists "${UserScripts}/RainbowBorders.sh"; then
-    ${UserScripts}/RainbowBorders.sh &
+if [ -x "${SCRIPTSDIR}/RainbowBordersStartup.sh" ]; then
+  "${SCRIPTSDIR}/RainbowBordersStartup.sh" >/dev/null 2>&1 || true
 fi
-
 
 exit 0

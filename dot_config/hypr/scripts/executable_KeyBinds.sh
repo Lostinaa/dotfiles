@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
-# /* ---- 💫 https://github.com/JaKooLit 💫 ---- */  ##
-# searchable enabled keybinds using rofi (supports bindd descriptions)
+# ==================================================
+#  KoolDots (2026)
+#  Project URL: https://github.com/LinuxBeginnings
+#  License: GNU GPLv3
+#  SPDX-License-Identifier: GPL-3.0-or-later
+# ==================================================
+# searchable keybinds using rofi
+#
+# The list comes from lua/keybind_index.lua, which records every hl.bind() in
+# Hyprland's Lua VM and renders it to the runtime directory. Nothing here parses
+# config files, so what rofi shows is what the compositor has bound.
+#
+# The file is rewritten before every run rather than trusted: a bind added with
+# `hyprctl eval` after the last reload changes the VM's registry but not the
+# file, and a config load that failed halfway leaves the file one write behind.
 
 # kill yad to not interfere with this binds
 pkill yad || true
@@ -10,146 +23,36 @@ if pidof rofi > /dev/null; then
   pkill rofi
 fi
 
-# define the config files
-keybinds_conf="$HOME/.config/hypr/configs/Keybinds.conf"
-user_keybinds_conf="$HOME/.config/hypr/UserConfigs/UserKeybinds.conf"
-laptop_conf="$HOME/.config/hypr/UserConfigs/Laptops.conf"
-rofi_theme="$HOME/.config/rofi/config-keybinds.rasi"
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+runtime_dir="${XDG_RUNTIME_DIR:-/tmp}"
+cache="$runtime_dir/kooldots-keybinds.txt"
+rofi_theme="$config_home/hypr/rofi/config-keybinds.rasi"
 msg='☣️ NOTE ☣️: Clicking with Mouse or Pressing ENTER will have NO function'
 
-# collect raw bind lines (strip end-of-line comments) from available files
-files=("$keybinds_conf" "$user_keybinds_conf")
-[[ -f "$laptop_conf" ]] && files+=("$laptop_conf")
+# Ask the live Lua VM to rewrite the list. Best effort: on a config whose
+# hyprland.lua predates keybind_index.lua there is no module to call.
+hyprctl eval 'KOOLDOTS_KEYBIND_INDEX:write_cache()' >/dev/null 2>&1 || true
 
-# Parse binds/unbinds from files, detect overrides, and keep unique effective binds
-declare -A binding_map        # combo -> bind line (effective)
-declare -A source_map         # combo -> source file
-declare -A user_bind_map      # combo -> user bind line
-declare -A unbound_user       # combo -> 1 if explicitly unbound in user file
-declare -A seen_any_bind      # combo -> 1 if any bind seen (for iteration)
-declare -A default_seen       # combo -> 1 if default bind exists
-declare -a missing_unbind_suggestions_arr
-
-normalize_combo() { echo "$1" | sed -E 's/[[:space:]]//g'; }
-
-extract_combo() {
-  # arg: a bind/unbind line; returns "mods,key" via echo
-  local s="$1"
-  s="$(echo "$s" | sed -E 's/[[:space:]]+#.*$//')"
-  if [[ "$s" =~ = ]]; then
-    local rhs="${s#*=}"
-    local mods="$(echo "$rhs" | awk -F',' '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')"
-    local key="$(echo "$rhs"  | awk -F',' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')"
-    echo "${mods},${key}"
-  fi
-}
-
-for file in "${files[@]}"; do
-  [[ ! -f "$file" ]] && continue
-  while IFS= read -r line; do
-    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-
-    if [[ "$line" =~ ^[[:space:]]*bind[a-z]*[[:space:]]*= ]]; then
-      combo_raw="$(extract_combo "$line")"
-      [[ -z "$combo_raw" ]] && continue
-      combo="$(normalize_combo "$combo_raw")"
-      seen_any_bind["$combo"]=1
-
-      if [[ "$file" != "$user_keybinds_conf" ]]; then
-        default_seen["$combo"]=1
-      fi
-
-      # prefer user bind, else first seen
-      if [[ -z "${source_map[$combo]}" ]]; then
-        binding_map["$combo"]="$line"
-        source_map["$combo"]="$file"
-      fi
-      if [[ "$file" == "$user_keybinds_conf" ]]; then
-        user_bind_map["$combo"]="$line"
-        binding_map["$combo"]="$line"
-        source_map["$combo"]="$file"
-      fi
-
-    elif [[ "$line" =~ ^[[:space:]]*unbind[[:space:]]*= ]]; then
-      combo_raw="$(extract_combo "$line")"
-      [[ -z "$combo_raw" ]] && continue
-      combo="$(normalize_combo "$combo_raw")"
-      if [[ "$file" == "$user_keybinds_conf" ]]; then
-        unbound_user["$combo"]=1
-      fi
-    fi
-  done < "$file"
-done
-
-# Build raw_keybinds for display and collect missing unbind suggestions
-raw_keybinds=""
-for combo in "${!seen_any_bind[@]}"; do
-  eff_line="${binding_map[$combo]}"
-  src="${source_map[$combo]}"
-  [[ -z "$eff_line" ]] && continue
-  raw_keybinds+="$eff_line"$'\n'
-
-  # If user overrides a default but didn't unbind in user file, suggest unbind
-  if [[ "$src" == "$user_keybinds_conf" && -n "${default_seen[$combo]}" && -z "${unbound_user[$combo]}" ]]; then
-    suggest="$(echo "$eff_line" | sed -E 's/^[[:space:]]*bind[a-z]*/unbind/')"
-    missing_unbind_suggestions_arr+=("$suggest")
-  fi
-done
-
-# If there are missing unbinds, write suggestions to a temp file and note in message
-if (( ${#missing_unbind_suggestions_arr[@]} > 0 )); then
-  suggestions_file="$(mktemp -t hypr-unbind-suggestions.XXXX.conf)"
-  printf '%s\n' "${missing_unbind_suggestions_arr[@]}" > "$suggestions_file"
-  msg="$msg | Overrides missing unbind: ${#missing_unbind_suggestions_arr[@]} (suggestions: $suggestions_file)"
+# Fallback for that case, and for a build where the hook could not be installed:
+# read the compositor's own bind table. Mask bits are SHIFT 1, CTRL 4, ALT 8,
+# SUPER 64.
+if [ ! -s "$cache" ] && command -v jq > /dev/null 2>&1; then
+  hyprctl binds -j 2>/dev/null | jq -r '
+    def mods($m): [ if (($m / 64 | floor) % 2) == 1 then "SUPER" else empty end,
+                    if (($m / 4  | floor) % 2) == 1 then "CTRL"  else empty end,
+                    if (($m / 8  | floor) % 2) == 1 then "ALT"   else empty end,
+                    if (($m % 2) == 1)             then "SHIFT" else empty end ] | join("+");
+    .[] | (mods(.modmask)) as $mods
+        | (if $mods == "" then .key else $mods + "+" + .key end) as $chord
+        | if (.has_description and .description != "") then "\($chord) — \(.description)" else $chord end
+  ' > "$cache" 2>/dev/null || true
 fi
 
-# check for any keybinds to display
-if [[ -z "$raw_keybinds" ]]; then
-    echo "no keybinds found."
-    exit 1
+if [ ! -s "$cache" ]; then
+  notify-send "Keybinds" "Keybind list unavailable - run: hyprctl reload" 2>/dev/null || true
+  exit 1
 fi
-
-# transform into a readable list: MODS+KEY — DESCRIPTION (for bindd) or DISPATCHER [PARAMS] (for bind)
-display_keybinds=$(echo "$raw_keybinds" | awk -F'=' '
-  function trim(s){ gsub(/^[ \t]+|[ \t]+$/,"",s); return s }
-  /^[[:space:]]*bind/ {
-    binder=$1; gsub(/[ \t]/, "", binder);
-    hasdesc = (index(binder, "d")>0);
-
-    rhs=$2; rhs=trim(rhs);
-    n=split(rhs, a, /[ \t]*,[ \t]*/);
-
-    mods=trim(a[1]); key=(n>=2?trim(a[2]):"");
-    desc=""; dispatcher=""; params="";
-
-    if (hasdesc) {
-      desc=(n>=3?trim(a[3]):"");
-      dispatcher=(n>=4?trim(a[4]):"");
-      start=5;
-    } else {
-      dispatcher=(n>=3?trim(a[3]):"");
-      start=4;
-    }
-
-    for(i=start;i<=n;i++){ if(length(a[i])){ p=trim(a[i]); if(p!="") params = (params?params", ":"") p } }
-
-    gsub(/\$mainMod/,"SUPER",mods);
-    gsub(/[ \t]+/,"+",mods);
-
-    combo = (mods && key) ? mods "+" key : (key?key:mods);
-
-    if (hasdesc && desc != "") {
-      print combo, " — ", desc;
-    } else {
-      if (dispatcher != "" && params != "")
-        print combo, " — ", dispatcher, " ", params;
-      else if (dispatcher != "")
-        print combo, " — ", dispatcher;
-      else
-        print combo;
-    }
-  }
-')
 
 # use rofi to display the keybinds
-printf '%s\n' "$display_keybinds" | rofi -dmenu -i -config "$rofi_theme" -mesg "$msg"
+"$config_home/hypr/scripts/RofiFocusedWallpaperLink.sh" >/dev/null 2>&1 || true
+rofi -dmenu -i -config "$rofi_theme" -mesg "$msg" < "$cache"
