@@ -9,3 +9,8 @@
 .config/hypr/rofi/.current_wallpaper*
 .config/hypr/scripts/dots-tui
 .config/hypr/scripts/dots-tui
+.config/cava/config
+.config/kitty/kitty-themes/01-Wallust.conf
+.config/hypr/UserConfigs/kitty-themes/01-Wallust.conf
+.bashrc
+.zshrc
